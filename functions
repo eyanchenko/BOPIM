@@ -1,85 +1,56 @@
-## Functions to implement BOPIM algorithm in Python
+# Load libraries
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import random
+import math
+import statistics
+import time
+import warnings
+warnings.filterwarnings('ignore')
 
-# BOPIM algorithm for influence maximization
-# E: edge list
-# kk: seed set size
-# lam: infection parameter
-# B: budget
-# num_samps: number of initial evaluations
-# obj_sims: number of MC evaluations for influence spread function
-# prior: shrinkage prior ["Horseshoe", "DL", "R2D2"]
-# mc_burn: burn-in samples for Gibbs sampler
-# mc_iters: MCMC samples for Gibbs sampler
-# mc_cores: number of cores for objective function evaluation
+from scipy.optimize import minimize
+from multiprocessing import Pool
+import networkx as nx
+from multiprocessing import get_context
+from itertools import repeat
+from itertools import chain
+from multiprocessing import Pool
+from multiprocessing import get_context
+from igraph import Graph
+from scipy.stats import norm
+import scipy
 
-def bayesopt(E, kk=1, lam=0.01, B=5, num_samps=20, obj_sims=100, prior="Horseshoe", mc_burn=1000, mc_iters=5000, mc_cores=7):
-    
-    # Sample points to evaluate objective function at.
-    N = num_samps
-    nsims = obj_sims
-    
-    # Compute degrees and sample proportionally
-    G = nx.from_pandas_edgelist(E, 'v1', 'v2')
-    n = len(G.nodes) # number of nodes
-    x = np.zeros((N,n))
-    y = np.zeros(N)
-    
-    degs = np.array(list(dict(G.degree()).values()))
-    degs = degs / sum(degs)
-    
-    S_samp = np.zeros((N,kk))
-    for i in range(N):
-        samp = list(np.random.choice(a=n, size=kk, replace=False, p=degs))
-        S_samp[i,:] = samp
-        x[i, samp] = 1
-        
-        
-        
-    out = [sigma_mc(E, list(S_samp[i,:]), lam, nsims, mc_cores) for i in range(N)]    
-        
-    #pool = get_context("fork").Pool(7)
-    #out = pool.starmap(sigma_mc_map, zip(repeat(E), S_samp, repeat(lam), repeat(nsims), repeat(False)) )
-    #pool.close()
-    
-    y = np.asarray(out)
-    meany = statistics.mean(y)
-    y = y - meany
-
-    # while still have iterations remaining
-    for b in range(B):
-            
-        # First run MCMC code
-        if prior=="Horseshoe":
-            alpha = horseshoe(y=y, X=x, mc_burn=mc_burn, mc_iters=mc_iters)
-        elif prior=="R2D2":
-            alpha = r2d2(y=y, X=x, mc_burn=mc_burn, mc_iters=mc_iters)
-        elif prior=="DL":
-            alpha = dirlap(y=y, X=x, mc_burn=mc_burn, mc_iters=mc_iters)
-            
-        # Then select largest parameters as seed nodes
-        S_opt = list(np.argpartition(np.median(alpha, axis=0), -kk)[-kk:])
-        x_opt = np.zeros(n)
-        x_opt[S_opt] = 1
-        
-        y = np.append(y, sigma_mc(E, S_opt, lam, nsims, mc_cores) - meany) 
-        x = np.append(x, [x_opt], axis=0)
-        print(b)
-    
-    
-    # Select largest value
-    y_opt = max(y) + meany
-    S_opt = list(np.where(x[np.argmax(y),:]>0)[0])
-    
-    return S_opt, y_opt
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable):
+        return iterable
 
 
+# Function to pre-process (bin) times
+def pre_process_times(E, grps = 10):
+    out = E.copy()
+    if type(grps)!=int:
+        out["t"] = pd.cut(out["t"], bins=grps, labels=list(range(len(grps)-1)))
+    else:
+        out["t"] = pd.cut(out["t"], bins=grps, labels=list(range(grps)))
+
+    out = out.drop_duplicates()
+    out = out.reset_index(drop=True)
+
+    # Convert node numbers from 0 to n
+    G = nx.from_pandas_edgelist(E, 'v1', 'v2') 
+    orig_nodes = list(G.nodes())
+    node_dict = {orig_nodes[i]: i for i in range(len(orig_nodes))}
+    out = pd.concat([out[["v1","v2"]].replace(to_replace=node_dict), out["t"]], axis=1)
+    return out
 
 
-# Single simulation of the SI process
+# Function to simulate SI process (new idea)
 # E:     input graph (as edge list)
 # S:     seed nodes
 # lam:   susceptibility parameter
-
 def sigma(E, S, lam, xxx=0):
     # I will keep track of infected nodes
     I = list(S.copy())
@@ -104,13 +75,6 @@ def sigma(E, S, lam, xxx=0):
     
     return(len(I))  
 
-# Multiple simulations of the SI process
-# E:     input graph (as edge list)
-# S:     seed nodes
-# lam:   susceptibility parameter
-# nsims: number of simulations
-# mc_cores: number of cores available for parallel evaluation
-
 def sigma_mc(E, S, lam, nsims=100, mc_cores=7):
 
     # Repeat function nsims times
@@ -120,22 +84,166 @@ def sigma_mc(E, S, lam, nsims=100, mc_cores=7):
                        
     out = list(out)
     
-    return(statistics.mean(out))
+    return(statistics.mean(out), statistics.stdev(out)/math.sqrt(len(out)) )
+
+
+# NOTE: we can use CELF because temporal SI model IS submodular according to Erkol et al. (2022)
+
+def greedy(E, k, lam, nsims=100, mc_cores=7):
+    
+    S = []     # optimal seed set
+    times = [] # computation time for each node
+    
+    G = nx.from_pandas_edgelist(E, 'v1', 'v2') 
+    start = time.time()
+    
+    spread = [sigma_mc(E, [node], lam, nsims, mc_cores)[0] for node in G.nodes()]
+    
+    # Sort in decreasing order of spread
+    Q = sorted( zip(G.nodes(),spread), key=lambda x: x[1],reverse=True)
+
+    # Add node with largest spread to seed set
+    cum_spread = Q[0][1]
+    S.append(Q[0][0])
+    times.append(time.time()-start)
+    
+    LOOKUPS = [len(G.nodes())]
+    
+    # Remove from consideration
+    Q = Q[1:]
+    
+    # Use CELF procedure to get k-1 remaining seed nodes
+
+    for _ in range(k-1):
+        
+        check = False
+        checked = []
+        node_lookup = 0
+        
+        while not check:
+            
+            node_lookup += 1
+        
+            # Calculate new spread of top node
+            cur_node = Q[0][0]
+            
+            # If we have already checked the current node, then it should be added to seed set
+            if cur_node in checked:
+                check = True
+            else:
+        
+                Q[0] = (cur_node, sigma_mc(E, S + [cur_node], lam, nsims, mc_cores)[0] - cum_spread)
+        
+                # Re-sort list and see if top node remained unchanged
+                Q = sorted(Q, key = lambda x: x[1], reverse = True)
+        
+                check = (Q[0][0] == cur_node)
+                checked.append(cur_node)
+        
+        # Add the next node
+        cum_spread += Q[0][1]
+        S.append(Q[0][0])
+        times.append(time.time()-start)
+        LOOKUPS.append(node_lookup)
+        
+        # Remove from consideration
+        Q = Q[1:]
+        
+    
+    return S, cum_spread, times, LOOKUPS
+
+def dyndeg(E, k, lam):
+    #Initialize empty seed set
+    S = []
+    # Possible nodes to consider
+    V = list(set(E["v1"]) or set(E["v2"]))
+    n = len(V)
+
+    ######## Step 1: Compute dynamic degrees
+
+    # Initialize dynamic degree
+    DD = [0]*n
+    td = [0]*n
+    # Temporal snapshots
+    T = pd.unique(E["t"])
+
+    # Create array where i th entry is the neighbors of nodes i at any time
+    nodes_total = [[] for Null in range(n)]
+    # Create array where i th entry is the neighbors of node i at time t-1
+    nodes_prev = [[] for Null in range(n)]
+
+    for v in range(n):
+        # Find neighbors of node v at t=0 and probability of being neighbor (probability of an edge)
+        nodes1        = list(E[(E["v1"]==V[v]) & (E["t"]==T[0])]["v2"])
+        nodes2        = list(E[(E["v2"]==V[v]) & (E["t"]==T[0])]["v1"])
+        nodes = nodes1 + nodes2
+
+        if len(nodes)>0:
+            nodes_prev[v] = list(set(nodes))
+            nodes_total[v] = list(set(nodes))
+    # Compute dynamic degree
+    for t in T[1:len(T)]:
+        # Create array where i th entry is the neighbors of node i at time t
+        nodes_curr = [[] for Null in range(n)]
+        for v in range(n):
+            # Find neighbors at current time
+            nodes1        = list(E[(E["v1"]==V[v]) & (E["t"]==t)]["v2"])
+            nodes2        = list(E[(E["v2"]==V[v]) & (E["t"]==t)]["v1"])
+            nodes = nodes1 + nodes2
+
+            if len(nodes)>0:
+                nodes_curr[v] = list(set(nodes))
+                nodes_total[v] = list(set(nodes_total[v] + nodes_curr[v]))
+
+            # Formula for dynamic degree from page 6 of Murata and Koga (2018)
+            if len(nodes_prev[v]) > 0 or len(nodes_curr[v]) > 0:
+                DD[v] += len(nodes_curr[v]) * (len(set(nodes_prev[v]) - set(nodes_curr[v]))) / (len(set(nodes_prev[v] + nodes_curr[v])))
+        nodes_prev = nodes_curr
+
+
+    ######## Step 2: Add node to seed with largest dynamic degrees and update values
+    dd = DD
+    for i in range(k):
+        idx = dd.index(max(dd)) # Find max dd
+        v = V[idx]
+        S.append(v)             # and add it to seed set
+
+        # Find which nodes were neighbors with v and update dd
+        for u in range(n):
+            if v in nodes_total[u]:
+                td[u] += 1
+                dd[u] = DD[u] - 2*td[u] - (DD[u]-td[u])*td[u]*lam
+
+        # Remove node v from future consideration
+        nodes_total[idx] = []
+        dd[idx] = -100
 
 
 
-# Horseshoe Gibbs sampler
-# y: response vector
-# X: covariate matrix
-# mc_burn: number of burn-in samples
-# mc_iters: number of MCMC samples
 
-def horseshoe(y, X, mc_burn=1000, mc_iters=5000):
+    return(S)
+
+
+def find_n(E0, S):
+    S = [ int(x) for x in S ]
+    return set(S + list(pd.unique(E0[E0["v1"].isin(S)]["v2"])))
+
+
+def jac(L1, L2):
+    L1 = set(L1)
+    L2 = set(L2)
+    return len(L1.intersection(L2)) / len(L1.union(L2))
+
+def horseshoe_cov(y, X, Sigma, mc_burn=1000, mc_iters=5000, gamma=1):
     N = X.shape[0]
     n = X.shape[1]
     
-   # Initialize MCMC
-    CHOL = np.linalg.cholesky(np.transpose(X) @ X + np.identity(n))
+    loggamma = math.log(gamma)
+    
+    Sigmainv = np.linalg.inv(math.exp(loggamma)*Sigma + np.identity(N))
+    
+    # Initialize MCMC
+    CHOL = np.linalg.cholesky(np.transpose(X) @ Sigmainv @ X + np.identity(n))
     alpha = CHOL @ np.random.normal(0, 1, n)
     sigma2 = 1 / np.random.gamma(1, 1/1)
     beta2 = np.zeros(n)
@@ -148,23 +256,23 @@ def horseshoe(y, X, mc_burn=1000, mc_iters=5000):
         nu[i] = 1 / np.random.gamma(1, 1/1) 
     xi = 1 / np.random.gamma(1, 1/1)  
     
-    alpha_post = np.zeros((mc_iters,n))
+    alpha_post  = np.zeros((mc_iters,n))
+    sigma2_post = np.zeros(mc_iters)
+    
     # GO! 
     for i in range(mc_burn+mc_iters):
         # Sample from alpha
-        
-        #A = np.transpose(X) @ X + np.diag(1/(tau2*beta2))
-        #M = scipy.sparse.csr_matrix(A)
-        #Ainv = scipy.linalg.inv(A)
-        #Ainv = Ainv.toarray()
+
         Sinv = np.diag(1/(tau2*beta2))
         
-        L = np.linalg.cholesky(np.transpose(X) @ X + Sinv)
-        Linv = np.linalg.inv(L)
-        alpha = np.transpose(Linv) @ Linv @ np.transpose(X) @ y + math.sqrt(sigma2)*Linv @ np.random.normal(0, 1, n)
+        L = np.linalg.cholesky(np.transpose(X) @ Sigmainv @ X + Sinv)
+        Linv = scipy.linalg.solve_triangular(L, np.identity(n))
+        alpha = np.transpose(Linv) @ Linv @ np.transpose(X) @ Sigmainv @ y + math.sqrt(sigma2)*Linv @ np.random.normal(0, 1, n)
 
+        XA = X@alpha
+        
         # Sample from sigma2
-        sigma2 = 1/np.random.gamma((N+n)/2, 1/(sum((y-X@alpha)**2)/2 + sum(alpha**2/(2*tau2*beta2))))
+        sigma2 = 1/np.random.gamma((N+n)/2, 1/(np.transpose(y-XA)@Sigmainv@(y-XA)/2 + sum(alpha**2/(2*tau2*beta2))))
 
         # Sample from beta2 and nu
         for k in range(n):
@@ -176,262 +284,184 @@ def horseshoe(y, X, mc_burn=1000, mc_iters=5000):
 
         # Sample from xi
         xi = 1/np.random.gamma(1, 1/(1+1/tau2))
+
+        
+        # Fix gamma at MLE     
+                                                               
+        if i >= mc_burn:
+            alpha_post[i-mc_burn, :] = alpha
+            sigma2_post[i-mc_burn] = sigma2
+
+
+        
+    return  np.median(alpha_post, axis=0), np.median(sigma2_post)
+
+
+def mean_cov_func(Sstar, x, y, alpha, sigma2, gamma, Sigma, neighs):
+    NN = len(y)
+    E0 = E[E["t"]==0][["v1", "v2"]]
+    Vinv = np.linalg.inv(gamma*sigma2*Sigma + sigma2*np.identity(NN))
+    
+    neighs_new = list(find_n(E0, Sstar))
+    new_cov = np.zeros(NN)
+    for i in range(NN):
+        new_cov[i]  = gamma*sigma2*jac(neighs[i], neighs_new)
+        
+    mu = sum(alpha[Sstar])  + new_cov@Vinv@(y-x@alpha)
+    sd = math.sqrt(sigma2*(gamma+1) - new_cov @ Vinv @ new_cov)
+
+    return mu, sd
+
+
+def EI(Sstar, x, y, ystar, alpha, sigma2, gamma, Sigma, neighs):
+
+    mu, sd = mean_cov_func(Sstar, x, y, alpha, sigma2, gamma, Sigma, neighs)
+    
+    Delta = mu - ystar
+
+    return max(Delta, 0) + sd * norm.pdf(Delta/sd) - abs(Delta)*norm.cdf(Delta/sd)
+
+
+def bayesopt_new(E, kk=1, lam=0.01, N0=20, B=5, obj_sims=100, mc_burn=1000, mc_iters=5000, mc_cores=10):
+
+    start = time.time()
+    
+    # Sample points to evaluate objective function at.
+    N = N0
+    nsims = obj_sims
+    
+    # Compute degrees and sample proportionally
+    G = nx.from_pandas_edgelist(E, 'v1', 'v2')
+    n = len(G.nodes) # number of nodes
+    x = np.zeros((N,n))
+    y = np.zeros(N)
+    
+    degs = np.array(list(dict(G.degree()).values()))
+    degs = degs / sum(degs)
+    
+    S_samp = np.zeros((N,kk))
+    for i in range(N):
+        samp = list(np.random.choice(a=n, size=kk, replace=False, p=degs))
+        S_samp[i,:] = samp
+        x[i, samp] = 1
+        
+        
+    out = [sigma_mc(E, list(S_samp[i,:]), lam, nsims, mc_cores)[0] for i in range(N)]    
+    
+    y = np.asarray(out)
+    meany = statistics.mean(y)
+    y = y - meany
+    ystar = max(y)
+
+    cur_max = []
+    cur_max.append(ystar + meany)
+    
+    # Construct covariance matrix
+    neighs = []
+    E0 = E[E["t"]==0][["v1", "v2"]]
+    # Find neighbors of initial seed set
+    neighs = [list(find_n(E0, S_samp[i])) for i in range(N)]
+
+    # Compute Jaccard coefficient between all neighbor sets as measure of similarity
+    Sigma = np.zeros((N,N))
+    Sigma[0,0] = 1.01
+    for i in range(1, N):
+        for j in range(i):
+            Sigma[i,j] = jac(neighs[i], neighs[j])
+            Sigma[j,i] = Sigma[i,j]
+        Sigma[i,i] = 1.01
+
+    # Greedy algorithm to find optimal node set based on EI
+    def greedy2(kk, x, y, ystar, alpha, sigma2, gamma, Sigma, neighs):
+    
+        # All nodes
+        nodes = set([x for x in range(n)])
+        
+        # Initialization
+        s_cur = list(np.random.choice(a=n, size=kk, replace=False, p=degs))
+    
+        EI_cur = EI(s_cur, x, y, ystar, alpha, sigma2, gamma, Sigma, neighs)
+        ind = True
+
+        # Candidates we have already tried
+        x_list = x.tolist()
+        
+        while ind:
+            ind = False
+        
+            # Randomize order
+            random.shuffle(s_cur)
+            
+            for i in range(kk):
+                # Swap ith element with all other nodes and keep largest
+                for node in (nodes - set(s_cur)):
+                    s_try = s_cur.copy()
+                    s_try[i] = node
+
+                    x_try = np.zeros(n)
+                    x_try[s_try] = 1
+
+                    # Only try if we haven't already considered
+                    if list(x_try) not in x_list:
+                        EI_try = EI(s_try, x, y, ystar, alpha, sigma2, gamma, Sigma, neighs)
+                    
+                        if  EI_try > EI_cur:
+                            EI_cur = EI_try.copy()
+                            s_cur[i] = node
+                            ind = True
+        
+        
+        return s_cur
+
+    # While still having iterations remaining
+    for b in range(B):
+
+        
+        # Find MLE of gamma
+        #def mle_func(loggamma):
+        # sigma2 = statistics.variance(y)
+        # return y @ np.linalg.inv(math.exp(loggamma)*Sigma + np.identity(len(y))) @ y/sigma2 + math.log(np.linalg.det(sigma2*(math.exp(loggamma)*Sigma + np.identity(len(y)))))
+    
+        # gamma_mle = math.exp(float(minimize(mle_func, math.log(1), method='nelder-mead').x))
+
+        gamma_mle = 1
+        alpha, sigma2 = horseshoe_cov(y=y, X=x, Sigma=Sigma, mc_burn=mc_burn, mc_iters=mc_iters, gamma=gamma_mle)
+
+
+
+        S_opt = greedy2(kk, x, y, ystar, alpha, sigma2, gamma_mle, Sigma, neighs)
+        
+        x_opt = np.zeros(n)
+        x_opt[S_opt] = 1
+
+        
+        y = np.append(y, sigma_mc(E, S_opt, lam, nsims, mc_cores)[0] - meany) 
+        x = np.append(x, [x_opt], axis=0)
+        ystar = max(y)
+
+        cur_max.append(ystar + meany)
+
+ 
+
+        # Update covariance matrix
+        neighs.append(list(find_n(E0, S_opt)))
+        new_cov = np.zeros((1,N+b))
+        for i in range(N + b):
+            new_cov[0,i]  = jac(neighs[i], neighs[N+b])
                 
-        if i >= mc_burn:
-            alpha_post[i-mc_burn, :] = alpha
+        Sigma = np.append(Sigma, new_cov, 0)
+        new_cov = np.array(np.append(new_cov,1))
+        new_cov = new_cov.reshape(-1, 1)
+        Sigma = np.concatenate((Sigma, new_cov), axis=1)
+        Sigma[N+b, N+b] = 1.01
+
         
-    return alpha_post
 
-# Dirichlet-Laplace Gibbs sampler
-# y: response vector
-# X: covariate matrix
-# mc_burn: number of burn-in samples
-# mc_iters: number of MCMC samples
+    # Select largest value
+    y_opt = (max(y) + meany)
+    S_opt = list(np.where(x[np.argmax(y),:]>0)[0])
 
-def dirlap(y, X, mc_burn=1000, mc_iters=5000):
-    N = X.shape[0]
-    p = X.shape[1]
-    
-    b = 0.5
-    a = 0.5
-    
-   # Initialize MCMC
-    psi = np.random.gamma(1,1, size=p)
-    phi = np.random.exponential(1, size=p)
-    phi = phi/sum(phi)
-    sigma2 = np.random.gamma(1,1, size=1)
-    tau  = np.random.gamma(1,1, size=1)
-    
-
-    Sinv = np.diag(1/(psi*(phi**2)*tau**2))
-    L = np.linalg.cholesky(np.transpose(X) @ X + Sinv)
-    Linv = np.linalg.inv(L)
-    alpha = np.transpose(Linv) @ Linv @ np.transpose(X) @ y + math.sqrt(sigma2)*Linv @ np.random.normal(0, 1, p)
-
-    
-    alpha_post = np.zeros((mc_iters,p))
-    # GO! 
-    for i in range(mc_burn+mc_iters):
-        # Sample from alpha
-        L = np.linalg.cholesky(np.transpose(X) @ X + Sinv)
-        Linv = np.linalg.inv(L)
-        alpha = np.transpose(Linv) @ Linv @ np.transpose(X) @ y + math.sqrt(sigma2)*Linv @ np.random.normal(0, 1, p)
-    
-        # Sample from sigma2
-        sigma2 = 1/np.random.gamma(shape=((0.001+ N+p)/2), scale=(0.001 + 0.5*sum((y-X@alpha)**2) + 0.5*sum(alpha**2/(tau**2*psi*(phi**2)))))
-        #sigma2 = 1
+    end = time.time()
         
-        # Sample from psi
-        for j in range(p):
-            psi[j] = 1/scipy.stats.invgauss.rvs(mu=math.sqrt(sigma2)*phi[j]*tau/abs(alpha[j]))
-        
-        #psi = np.asarray([1, 1, 1, 1, 1])
-        
-        # Sample from w
-        tau = gigrnd(p*a-p,1,2*sum(abs(alpha)/(math.sqrt(sigma2)*phi)))
-        #tau = 10    
-            
-        T = np.zeros(p) 
-        
-        # Sample from phi
-        for j in range(p):
-            T[j] = gigrnd(a-1, 1, 2*abs(alpha[j])/math.sqrt(sigma2))
-        
-        phi[j] = T[j]/sum(T)
-        #phi = np.asarray([0.2, 0.2, 0.2, 0.2, 0.2])
-        
-        # Update Sinv
-        Sinv = np.diag(1/(psi*(phi**2)*tau**2))
-        
-        if i >= mc_burn:
-            alpha_post[i-mc_burn, :] = alpha
-        
-    return alpha_post
+    return S_opt, y_opt, (end-start)
 
-
-# R2D2 Gibbs sampler
-# y: response vector
-# X: covariate matrix
-# mc_burn: number of burn-in samples
-# mc_iters: number of MCMC samples
-
-
-def r2d2(y, X, mc_burn=1000, mc_iters=5000):
-    N = X.shape[0]
-    n = X.shape[1]
-    
-    b = 0.5
-    api = 1/(n**(b/2) * N**(b/2) * math.log(N))
-    a = n * api
-    
-   # Initialize MCMC
-    psi = np.random.gamma(1,1, size=n)
-    phi = np.random.exponential(1, size=n)
-    phi = phi/sum(phi)
-    sigma2 = np.random.gamma(1,1, size=1)
-    w  = np.random.gamma(1,1, size=1)
-    xi = np.random.gamma(1,1)
-    
-
-    Sinv = np.diag(2/(w*psi*phi))
-    L = np.linalg.cholesky(np.transpose(X) @ X + Sinv)
-    Linv = np.linalg.inv(L)
-    alpha = np.transpose(Linv) @ Linv @ np.transpose(X) @ y + math.sqrt(sigma2)*Linv @ np.random.normal(0, 1, n)
-
-    alpha_post = np.zeros((mc_iters,n))
-    # GO! 
-    for i in range(mc_burn+mc_iters):
-        # Sample from alpha
-        L = np.linalg.cholesky(np.transpose(X) @ X + Sinv)
-        Linv = np.linalg.inv(L)
-        alpha = np.transpose(Linv) @ Linv @ np.transpose(X) @ y + math.sqrt(sigma2)*Linv @ np.random.normal(0, 1, n)
-
-        # Sample from sigma2
-        sigma2 = 1/np.random.gamma((0.001+ N+n)/2, (0.001 + 0.5*sum((y-X@alpha)**2) + 0.5*sum(alpha**2/(w*psi*phi/2))))
-
-        # Sample from psi
-        for j in range(n):
-            psi[j] = 1/scipy.stats.invgauss.rvs(mu=math.sqrt(sigma2*phi[j]*w/2)/abs(alpha[j]))
-        
-        # Sample from w
-        w = gigrnd(a-n/2,2*xi,2*sum(alpha**2/(sigma2*phi*psi)))
-            
-        # Sample xi
-        xi = np.random.gamma(a+b, 1+ w, size=1)
-        
-        # Sample from phi
-        for j in range(n):
-            phi[j] = gigrnd(api-0.5, 2*xi, 2*alpha[j]**2/(sigma2*psi[j]))
-        
-        phi = phi/sum(phi)
-        
-        # Update Sinv
-        Sinv = np.diag(2/(w*psi*phi))
-        
-        if i >= mc_burn:
-            alpha_post[i-mc_burn, :] = alpha
-        
-    return alpha_post
-
-
-# Generalized inverse gaussian sampler
-# From: https://github.com/getian107/PRScsx
-
-"""
-Random variate generator for the generalized inverse Gaussian distribution.
-Reference: L Devroye. Random variate generation for the generalized inverse Gaussian distribution.
-           Statistics and Computing, 24(2):239-246, 2014.
-"""
-
-import math
-from numpy import random
-
-
-def psix(x, alpha, lam):
-    f = -alpha*(math.cosh(x)-1.0)-lam*(math.exp(x)-x-1.0)
-    return f
-
-
-def dpsi(x, alpha, lam):
-    f = -alpha*math.sinh(x)-lam*(math.exp(x)-1.0)
-    return f
-
-
-def g(x, sd, td, f1, f2):
-    if (x >= -sd) and (x <= td):
-        f = 1.0
-    elif x > td:
-        f = f1
-    elif x < -sd:
-        f = f2
-
-    return f
-
-
-def gigrnd(p, a, b):
-    # setup -- sample from the two-parameter version gig(lam,omega)
-    p = float(p); a = float(a); b = float(b)
-    lam = p
-    omega = math.sqrt(a*b)
-
-    if lam < 0:
-        lam = -lam
-        swap = True
-    else:
-        swap = False
-
-    alpha = math.sqrt(math.pow(omega,2)+math.pow(lam,2))-lam
-
-    # find t
-    x = -psix(1.0, alpha, lam)
-    if (x >= 0.5) and (x <= 2.0):
-        t = 1.0
-    elif x > 2.0:
-        if (alpha == 0) and (lam == 0):
-            t = 1.0
-        else:
-            t = math.sqrt(2.0/(alpha+lam))
-    elif x < 0.5:
-        if (alpha == 0) and (lam == 0):
-            t = 1.0
-        else:
-            t = math.log(4.0/(alpha+2.0*lam))
-
-    # find s
-    x = -psix(-1.0, alpha, lam)
-    if (x >= 0.5) and (x <= 2.0):
-        s = 1.0
-    elif x > 2.0:
-        if (alpha == 0) and (lam == 0):
-            s = 1.0
-        else:
-            s = math.sqrt(4.0/(alpha*math.cosh(1)+lam))
-    elif x < 0.5:
-        if (alpha == 0) and (lam == 0):
-            s = 1.0
-        elif alpha == 0:
-            s = 1.0/lam
-        elif lam == 0:
-            s = math.log(1.0+1.0/alpha+math.sqrt(1.0/math.pow(alpha,2)+2.0/alpha))
-        else:
-            s = min(1.0/lam, math.log(1.0+1.0/alpha+math.sqrt(1.0/math.pow(alpha,2)+2.0/alpha)))
-
-    # find auxiliary parameters
-    eta = -psix(t, alpha, lam)
-    zeta = -dpsi(t, alpha, lam)
-    theta = -psix(-s, alpha, lam)
-    xi = dpsi(-s, alpha, lam)
-
-    p = 1.0/xi
-    r = 1.0/zeta
-
-    td = t-r*eta
-    sd = s-p*theta
-    q = td+sd
-
-    # random variate generation
-    while True:
-        U = random.random()
-        V = random.random()
-        W = random.random()
-        if U < q/(p+q+r):
-            rnd = -sd+q*V
-        elif U < (q+r)/(p+q+r):
-            rnd = td-r*math.log(V)
-        else:
-            rnd = -sd+p*math.log(V)
-
-        f1 = math.exp(-eta-zeta*(rnd-t))
-        f2 = math.exp(-theta+xi*(rnd+s))
-        if W*g(rnd, sd, td, f1, f2) <= math.exp(psix(rnd, alpha, lam)):
-            break
-
-    # transform back to the three-parameter version gig(p,a,b)
-    rnd = math.exp(rnd)*(lam/omega+math.sqrt(1.0+math.pow(lam,2)/math.pow(omega,2)))
-    if swap:
-        rnd = 1.0/rnd
-
-    rnd = rnd/math.sqrt(a/b)
-    return rnd
-
-    
