@@ -13,22 +13,34 @@ Repeated influence spread evaluations for SI model
 
 sigma_mc(E, S, lam, nsims=100, mc_cores=7)
 
+Greedy algorithm with CELF step
+
+greedy(E, k, lam, nsims=100, mc_cores=7)
+
+Dynamic Degree algorithm from Murata and Koga (2018)
+
+dyndeg(E, k, lam)
+
+Find neighbors of nodes in set S
+
+find_n(E0, S)
+
+Compute Jaccard coefficient between two sets
+
+jac(L1, L2)
 
 Horseshoe prior Gibbs sampler
 
-horseshoe(y, X, mc_burn=1000, mc_iters=5000)
+horseshoe_cov(y, X, Sigma, mc_burn=1000, mc_iters=5000, gamma=1)
 
+Compute conditional mean and variance of GP regression model
 
-Dirichlet-Laplace Gibbs sampler
+mean_cov_func(Sstar, x, y, alpha, sigma2, gamma, Sigma, neighs)
 
-dirlap(y, X, mc_burn=1000, mc_iters=5000)
+Compute Expected improvement of new seed set
 
-
-R2D2 Gibbs sampler
-
-r2d2(y, X, mc_burn=1000, mc_iters=5000)
-
+EI(Sstar, x, y, ystar, alpha, sigma2, gamma, Sigma, neighs)
 
 BOPIM algorithm
 
-bayesopt(E, kk=1, lam=0.01, B=5, num_samps=20, obj_sims=100, prior="Horseshoe", mc_burn=1000, mc_iters=5000, mc_cores=7)
+bayesopt_new(E, kk=1, lam=0.01, N0=20, B=5, obj_sims=100, mc_burn=1000, mc_iters=5000, mc_cores=10)
