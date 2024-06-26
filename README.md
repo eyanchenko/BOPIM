@@ -4,6 +4,10 @@ This repository houses the Python code for ``BOPIM: Bayesian optimization for in
 
 Functions overview:
 
+Creates temporal snapshots from edge list
+
+pre_process_times(E, grps = 10)
+
 Single influence spread evaluation for SI model
 
 sigma(E, S, lam, xxx=0)
