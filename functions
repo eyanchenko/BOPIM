@@ -264,7 +264,7 @@ def hamming_kernel(X, kk):
     return Sigma
 
 
-def horseshoe_cov(y, X, Sigma, mc_burn=1000, mc_iters=5000):
+def bayes_post(y, X, Sigma, mc_burn=1000, mc_iters=5000):
     N = X.shape[0]
     n = X.shape[1]
 
@@ -427,7 +427,7 @@ def bayesopt(E, kk=1, kern="J", lam=0.01, N0=20, B=5, obj_sims=1000, mc_burn=100
 
     # While still having iterations remaining
     for b in range(B):
-        beta0, sigma2 = horseshoe_cov(y=y, X=x, Sigma=Sigma, mc_burn=mc_burn, mc_iters=mc_iters)
+        beta0, sigma2 = bayes_post(y=y, X=x, Sigma=Sigma, mc_burn=mc_burn, mc_iters=mc_iters)
 
         # Replace ystar with maximum of mean function evaluated at observed locations
         ystar = np.max([mean_cov_func([j for j in range(n) if x[i,j]==1], x, y, kk, beta0, sigma2, Sigma, kern, neighs)[0] for i in range(N0+b)])
