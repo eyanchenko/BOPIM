@@ -33,18 +33,31 @@ Compute Jaccard coefficient between two sets
 
 jac(L1, L2)
 
-Horseshoe prior Gibbs sampler
+Compute the Jaccard correlation matrix
 
-horseshoe_cov(y, X, Sigma, mc_burn=1000, mc_iters=5000, gamma=1)
+jac_kernel(neighs)
+
+Compute the Hamming distance between two seed sets
+
+hamming(x, y, kk)
+
+Compute the Hamming correlation matrix
+
+hamming_kernel(X, kk)
+
+Compute the posterior distribution of the GP parameters
+
+bayes_post(y, X, Sigma, mc_burn=1000, mc_iters=5000)
+
 
 Compute conditional mean and variance of GP regression model
 
-mean_cov_func(Sstar, x, y, alpha, sigma2, gamma, Sigma, neighs)
+mean_cov_func(Sstar, x, y, kk, beta0, sigma2, Sigma, kernel, neighs)
 
 Compute Expected improvement of new seed set
 
-EI(Sstar, x, y, ystar, alpha, sigma2, gamma, Sigma, neighs)
+EI(Sstar, x, y, kk, ystar, beta0, sigma2, Sigma, kernel, neighs)
 
 BOPIM algorithm
 
-bayesopt_new(E, kk=1, lam=0.01, N0=20, B=5, obj_sims=100, mc_burn=1000, mc_iters=5000, mc_cores=10)
+bayesopt(E, kk=1, kern="J", lam=0.01, N0=20, B=5, obj_sims=1000, mc_burn=1000, mc_iters=5000, mc_cores=7)
