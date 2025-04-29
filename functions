@@ -331,7 +331,7 @@ def EI(Sstar, x, y, kk, ystar, beta0, sigma2, Sigma, kernel, neighs):
 
 
         
-def bayesopt(E, kk=1, kern="J", lam=0.01, N0=20, B=5, obj_sims=1000, mc_burn=1000, mc_iters=5000, mc_cores=7):
+def bayesopt(E, kk=1, kern="J", lam=0.01, N0=5, B=20, obj_sims=1000, mc_burn=1000, mc_iters=5000, mc_cores=7):
 
     start = time.time()
     
