@@ -1,5 +1,15 @@
 # BOPIM
-This repository houses the Python code for ``BOPIM: Bayesian optimization for influence maximization on temporal networks" by Eric Yanchenko, (accepted with minor revisions at Technometrics). Please cite the paper if you use these codes. Thanks!
+This repository houses the Python code for ``BOPIM: Bayesian optimization for influence maximization on temporal networks" by Eric Yanchenko, (accepted at Technometrics). Please cite the paper if you use these codes. Thanks!
+
+@article{yanchenko2025bopim,
+  title={BOPIM: Bayesian Optimization for influence maximization on temporal networks},
+  author={Yanchenko, Eric},
+  journal={Technometrics},
+  number={just-accepted},
+  pages={1--20},
+  year={2025},
+  publisher={Taylor \& Francis}
+}
 
 
 Functions overview:
