@@ -286,7 +286,7 @@ def bayes_post(y, X, Sigma, mc_burn=1000, mc_iters=5000):
         beta0 = np.random.normal(mmm, math.sqrt(vvv),1)
         
         # Sample from sigma2
-        sigma2 = 1/np.random.gamma(N/2, 1/(np.transpose(y)@Sigmainv@y/2))
+        sigma2 = 1/np.random.gamma(N/2, 1/(np.transpose(y-beta0)@Sigmainv@(y-beta0)/2))
                 
         if i >= mc_burn:
             beta0_post[i-mc_burn]  = beta0
