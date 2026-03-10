@@ -313,7 +313,7 @@ def mean_cov_func(Sstar, x, y, kk, beta0, sigma2, Sigma, kernel, neighs):
             new_cov[i]  = hamming(x[i, :], xstar, kk)   
         
     mu = beta0 + new_cov@Vinv@(y-beta0)
-    sd = math.sqrt(sigma2*(1 - new_cov @ Vinv @ new_cov))
+    sd = math.sqrt(sigma2*(2 - new_cov @ Vinv @ new_cov))
 
     return mu, sd
 
@@ -378,10 +378,10 @@ def bayesopt(E, kk=1, kern="J", lam=0.01, N0=5, B=20, obj_sims=1000, mc_burn=100
         neighs = [list(find_n(E0, S_samp[i])) for i in range(N)]
 
         # Compute Jaccard coefficient between all neighbor sets as measure of similarity
-        Sigma = jac_kernel(neighs)
+        K = jac_kernel(neighs)
 
     elif kern=="H":
-        Sigma = hamming_kernel(x, kk)
+        K = hamming_kernel(x, kk)
 
     # Greedy algorithm to find optimal node set based on EI
     def greedy2(kk, x, y, ystar, beta0, sigma2, Sigma, kernel, neighs):
@@ -427,12 +427,12 @@ def bayesopt(E, kk=1, kern="J", lam=0.01, N0=5, B=20, obj_sims=1000, mc_burn=100
 
     # While still having iterations remaining
     for b in range(B):
-        beta0, sigma2 = bayes_post(y=y, X=x, Sigma=Sigma, mc_burn=mc_burn, mc_iters=mc_iters)
+        beta0, sigma2 = bayes_post(y=y, X=x, Sigma= K + np.identity(N0+b), mc_burn=mc_burn, mc_iters=mc_iters)
 
         # Replace ystar with maximum of mean function evaluated at observed locations
-        ystar = np.max([mean_cov_func([j for j in range(n) if x[i,j]==1], x, y, kk, beta0, sigma2, Sigma, kern, neighs)[0] for i in range(N0+b)])
+        ystar = np.max([mean_cov_func([j for j in range(n) if x[i,j]==1], x, y, kk, beta0, sigma2, K + np.identity(N0+b), kern, neighs)[0] for i in range(N0+b)])
         
-        S_opt = greedy2(kk, x, y, ystar, beta0, sigma2, Sigma, kern, neighs)
+        S_opt = greedy2(kk, x, y, ystar, beta0, sigma2, K + np.identity(N0+b), kern, neighs)
         
         x_opt = np.zeros(n)
         x_opt[S_opt] = 1
@@ -462,7 +462,7 @@ def bayesopt(E, kk=1, kern="J", lam=0.01, N0=5, B=20, obj_sims=1000, mc_burn=100
 
 
     # Select largest value
-    yvec = [mean_cov_func([j for j in range(n) if x[i,j]==1], x, y, kk, beta0, sigma2, Sigma, kern, neighs)[0] for i in range(N0+b)]
+    yvec = [mean_cov_func([j for j in range(n) if x[i,j]==1], x, y, kk, beta0, sigma2, K + np.identity(N0+b), kern, neighs)[0] for i in range(N0+b)]
     y_opt = np.max(yvec) 
 
     S_opt = list(np.where(x[np.argmax(yvec),:]>0)[0])
