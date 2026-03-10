@@ -454,11 +454,11 @@ def bayesopt(E, kk=1, kern="J", lam=0.01, N0=5, B=20, obj_sims=1000, mc_burn=100
             for i in range(N + b):
                 new_cov[0,i]  = hamming(x[i, :], x[N+b, :], kk)  
             
-        Sigma = np.append(Sigma, new_cov, 0)
+        K = np.append(K, new_cov, 0)
         new_cov = np.array(np.append(new_cov,1))
         new_cov = new_cov.reshape(-1, 1)
-        Sigma = np.concatenate((Sigma, new_cov), axis=1)
-        Sigma[N+b, N+b] = 1.01       
+        K = np.concatenate((K, new_cov), axis=1)
+        K[N+b, N+b] = 1.01       
 
 
     # Select largest value
