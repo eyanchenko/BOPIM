@@ -259,7 +259,7 @@ def hamming_kernel(X, kk):
         for j in range(i):
             K[i,j] = hamming(X[i,:], X[j,:], kk)
             K[j,i] = K[i,j]
-        Sigma[i,i] = 1.01
+        K[i,i] = 1.01
 
     return K
 
