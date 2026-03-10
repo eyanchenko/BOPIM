@@ -281,9 +281,9 @@ def bayes_post(y, X, Sigma, mc_burn=1000, mc_iters=5000):
     # GO! 
     for i in range(mc_burn+mc_iters):
         # Sample from beta0
-        vvv = 1/(Sigma_sum/sigma2+1/100)
-        mmm = Sigmay/sigma2
-        beta0 = np.random.normal(mmm*vvv, math.sqrt(vvv),1)
+        vvv = 1/(Sigma_sum+1/100)
+        mmm = Sigmay
+        beta0 = np.random.normal(mmm*vvv, math.sqrt(sigma2*vvv),1)
         
         # Sample from sigma2
         sigma2 = 1/np.random.gamma(N/2, 1/(np.transpose(y-beta0)@Sigmainv@(y-beta0)/2))
